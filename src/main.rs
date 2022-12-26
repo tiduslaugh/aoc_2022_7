@@ -1,9 +1,7 @@
 use std::fs::File;
-use std::io;
 use std::io::{BufRead, BufReader};
 use std::collections::vec_deque::VecDeque;
 use std::error::Error;
-use std::ops::Deref;
 
 trait Node {
     fn name(&self) -> &String;
