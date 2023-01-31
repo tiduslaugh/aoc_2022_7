@@ -1,74 +1,155 @@
+extern crate core;
+
+use std::borrow::{Borrow, BorrowMut};
+use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::collections::vec_deque::VecDeque;
 use std::error::Error;
+use std::rc::Rc;
 
-trait Node {
-    fn name(&self) -> &String;
-    fn size(&self) -> usize;
-}
+use lazy_regex::*;
+use downcast_rs::*;
 
-struct FileNode {
-    filename: String,
-    filesize: usize
-}
-
-impl Node for FileNode {
-    fn name(&self) -> &String {
-        &self.filename
-    }
-    fn size(&self) -> usize {
-        self.filesize
+enum Node{
+    FileNode {
+        filename: String,
+        filesize: usize,
+    },
+    DirectoryNode {
+        dirname: String,
+        entries: VecDeque<NodeRef>,
     }
 }
 
-struct DirectoryNode {
-    dirname: String,
-    entries: VecDeque<Box<dyn Node>>
-}
+type NodeRef = Rc<RefCell<Node>>;
 
-impl Node for DirectoryNode {
-    fn name(&self) -> &String {
-        &self.dirname
-    }
-    fn size(&self) -> usize {
-        self.entries.iter().map(|x| x.size()).sum()
+fn get_name(n: &Node) -> &String {
+    match n {
+        Node::FileNode{filename: f, .. } => f,
+        Node::DirectoryNode{dirname: d, ..} => d,
     }
 }
 
-impl DirectoryNode {
-    fn new (name: String) -> DirectoryNode {
-        DirectoryNode {
-            dirname: name,
-            entries: VecDeque::new()
-        }
+fn get_size(n: NodeRef) -> usize {
+    match n.borrow() {
+        Node::FileNode {filesize: s, ..} => *s,
+        Node::DirectoryNode {entries, ..} =>
+            entries.iter().map(|x| get_size(x.clone())).sum(),
     }
 }
 
 struct DirectoryTree {
-    root: DirectoryNode
+    root: NodeRef
+}
+
+fn make_node_ref(n: Node) -> NodeRef {
+    Rc::new(RefCell::new(n))
 }
 
 impl Default for DirectoryTree {
     fn default() -> Self {
         DirectoryTree {
-            root: DirectoryNode::new(String::from("/"))
+            root: make_node_ref(
+                Node::DirectoryNode {
+                    dirname: String::from("/"),
+                    entries: VecDeque::new()
+                }
+            )
         }
     }
 }
 
-fn load_data(mut reader: BufReader<File>) -> Result<DirectoryTree, Box<dyn Error>> {
-    let mut line = String::new();
-    let tree: DirectoryTree = Default::default();
-    while reader.read_line(&mut line).is_ok() {
-
+fn execute_cd<'a> (
+    dir_stack: &'a mut VecDeque<NodeRef>,
+    dirname: &str
+) -> Result<(), &'static str> {
+    if "/" == dirname {
+        let root = dir_stack.pop_front().unwrap();
+        dir_stack.clear();
+        dir_stack.push_back(root);
+        return Ok(())
     }
-    Ok(DirectoryTree{
-        root: DirectoryNode{
-            dirname: "/".parse()?,
-            entries: VecDeque::new()
+    let current = &dir_stack[dir_stack.len()-1].borrow();
+
+    match current {
+        Node::DirectoryNode { entries, ..} => {
+            for entry in entries.iter() {
+                match entry {
+                    Node::FileNode { .. } => continue,
+                    Node::DirectoryNode { dirname: name, .. } => {
+                        if name == dirname {
+                            dir_stack.push_back(entry.clone());
+                            return Ok(())
+                        }
+                    }
+                }
+            };
+            return Err("Couldn't find directory")
         }
-    })
+        _ => panic!()
+    }
+
+    // unsure what behavior we need. will err for now
+    Err("Not found")
+    // let newdir = DirectoryNode::new(dirname.into_string());
+    // current.entries.push_back(newdir);
+    // return Ok(&newdir);
+}
+
+fn execute_dirent(mut current: NodeRef, fst: &str, snd: &str) -> Result<(), &'static str> {
+    match current.borrow_mut() {
+        Node::FileNode {..} => Err("Can't ls a file"),
+        Node::DirectoryNode {
+            entries, ..
+        } => if fst == "dir" {
+            entries.push_back(make_node_ref(
+                Node::DirectoryNode {
+                    dirname: String::from(snd),
+                    entries: VecDeque::new()
+                }
+            ));
+            Ok(())
+        }
+        else {
+            let p: usize = fst.parse::<usize>().or(Err("Invalid looking string"))?;
+            entries.push_back(make_node_ref(
+                Node::FileNode {
+                    filename: String::from(snd),
+                    filesize: p
+                }
+            ));
+            Ok(())
+        }
+    }
+
+}
+
+fn load_data(mut reader: BufReader<File>) -> Result<DirectoryTree, Box<dyn Error>> {
+    let mut t: DirectoryTree = Default::default();
+    let mut dir_stack: VecDeque<&mut Node> = VecDeque::new();
+    dir_stack.push_back(&mut t.root);
+    let mut line = String::new();
+    while reader.read_line(&mut line).is_ok() {
+        let cd_cap = regex_captures!(r#"^\$ cd (.+)$"#, &line);
+        if cd_cap.is_some() {
+            let (_, dirname) = cd_cap.unwrap();
+            execute_cd(&mut dir_stack, dirname)?;
+            continue
+        }
+        let dir_cap = regex_captures!(r#"^\$ ls$"#, &line);
+        if dir_cap.is_some() {
+            continue
+        }
+        let dirent_cap = regex_captures!(r#"^(dir|\d+) (.*)$"#, &line);
+        if dirent_cap.is_some() {
+            let (_, fst, snd) = dirent_cap.unwrap();
+            let current = dir_stack.get(0).unwrap();
+            execute_dirent(*current, fst, snd)?;
+            continue
+        }
+    }
+    Ok(t)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
