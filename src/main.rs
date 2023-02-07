@@ -3,9 +3,10 @@ extern crate core;
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Result as IoResult};
 use std::collections::vec_deque::VecDeque;
 use std::error::Error;
+use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
@@ -58,6 +59,30 @@ impl Default for DirectoryTree {
                 }
             )
         }
+    }
+}
+
+impl Node {
+    fn _fmt_rec(&self, f: &mut Formatter<'_>, depth: usize) -> std::fmt::Result {
+        let padding = " ".repeat(depth);
+        match self {
+            Node::FileNode { filesize, filename } => {
+                return write!(f, "{padding}{filesize}  {filename}");
+            }
+            Node::DirectoryNode { dirname, entries } => {
+                write!(f, "{padding}{dirname} {}\n", entries.len())?;
+                for entry in entries.iter() {
+                    RefCell::borrow(entry)._fmt_rec(f, depth+2)?;
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+impl Display for Node {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        return self._fmt_rec(f, 0);
     }
 }
 
@@ -120,12 +145,20 @@ fn execute_dirent(mut current: NodeRef, fst: &str, snd: &str) -> Result<(), &'st
 
 }
 
-fn load_data(mut reader: BufReader<File>) -> Result<DirectoryTree, Box<dyn Error>> {
+fn load_data(mut reader: BufReader<File>) -> Result<DirectoryTree, &'static str> {
     let mut t: DirectoryTree = Default::default();
     let mut dir_stack: VecDeque<NodeRef> = VecDeque::new();
     dir_stack.push_back( t.root.clone());
     let mut line = String::new();
-    while reader.read_line(&mut line).is_ok() {
+    let mut i = 0;
+    loop {
+        let res = reader.read_line(&mut line);
+        if res.is_err() {
+            return Err("Things went south");
+        }
+        if res.unwrap() == 0 { // EOF
+            break;
+        }
         let cd_cap = regex_captures!(r#"^\$ cd (.+)$"#, &line);
         if cd_cap.is_some() {
             let (_, dirname) = cd_cap.unwrap();
@@ -150,6 +183,7 @@ fn load_data(mut reader: BufReader<File>) -> Result<DirectoryTree, Box<dyn Error
 fn main() -> Result<(), Box<dyn Error>> {
     let f = File::open("input.txt")?;
     let reader = BufReader::new(f);
-    let data = load_data(reader);
+    let data = load_data(reader)?;
+    println!("{}", RefCell::borrow(&data.root));
     Ok(())
 }
