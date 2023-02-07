@@ -10,7 +10,6 @@ use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
 use lazy_regex::*;
-use downcast_rs::*;
 
 enum Node{
     FileNode {
@@ -74,7 +73,7 @@ fn execute_cd<'a> (
     }
     let current = dir_stack[dir_stack.len()-1].clone();
 
-    match RefCell::borrow(&current).deref() {
+    let x = match RefCell::borrow(&current).deref() {
         Node::DirectoryNode { entries, ..} => {
             for entry in entries.iter() {
                 match RefCell::borrow(entry).deref() {
@@ -90,13 +89,7 @@ fn execute_cd<'a> (
             return Err("Couldn't find directory")
         }
         _ => panic!()
-    }
-
-    // unsure what behavior we need. will err for now
-    Err("Not found")
-    // let newdir = DirectoryNode::new(dirname.into_string());
-    // current.entries.push_back(newdir);
-    // return Ok(&newdir);
+    }; x
 }
 
 fn execute_dirent(mut current: NodeRef, fst: &str, snd: &str) -> Result<(), &'static str> {
